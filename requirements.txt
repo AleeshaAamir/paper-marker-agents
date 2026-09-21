@@ -1,0 +1,5 @@
+# The pipeline runs with ZERO dependencies against StubLLM.
+# Install these only when you move to a real model (Phase 2).
+openai>=1.40.0        # also speaks to Ollama / vLLM via base_url
+fastapi>=0.115.0      # Phase 5: expose the pipeline to the .NET backend
+uvicorn>=0.30.0
