@@ -17,9 +17,11 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import AnswerSegment
-from llm.client import StubLLM
+from llm.client import StubLLM, OpenAICompatibleClient
 from pipeline import MarkingPipeline
 from evaluation.metrics import report
+
+DEFAULT_BASE_URL = "http://localhost:11434/v1"
 
 GOLD_PATH = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "data", "gold_set.jsonl")
@@ -70,16 +72,27 @@ def print_table(title, by_lang, statuses):
     print(f"  routing: {dict(statuses)}")
 
 
+def make_client(args):
+    if args.model:
+        return OpenAICompatibleClient(model_id=args.model, base_url=args.base_url)
+    return StubLLM()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ablation", action="store_true")
+    parser.add_argument("--model", default=None,
+                        help="Model id to use via OpenAICompatibleClient "
+                             "(e.g. qwen2.5:7b-instruct). Omit to use StubLLM.")
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL,
+                        help=f"OpenAI-compatible base URL (default: {DEFAULT_BASE_URL}).")
     args = parser.parse_args()
 
     rows = load_gold()
     print(f"Loaded {len(rows)} gold answers.")
 
     if not args.ablation:
-        pipeline = MarkingPipeline(StubLLM(), use_critic=True)
+        pipeline = MarkingPipeline(make_client(args), use_critic=True)
         print_table("full pipeline", *run(pipeline, rows))
         return
 
@@ -90,7 +103,7 @@ def main():
         ("+ critic (full)",             dict(use_critic=True,  self_consistency_runs=3)),
     ]
     for name, kwargs in configs:
-        pipeline = MarkingPipeline(StubLLM(), **kwargs)
+        pipeline = MarkingPipeline(make_client(args), **kwargs)
         print_table(name, *run(pipeline, rows))
 
 

@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import AnswerSegment, Status, Flag
-from llm.client import StubLLM
+from llm.client import StubLLM, extract_json
 from pipeline import MarkingPipeline
 from sanitize import detect_injection
 from agents.rubric_agent import _rebalance
@@ -98,6 +98,17 @@ def main():
           abs(quadratic_weighted_kappa([1, 2, 3, 4], [1, 2, 3, 4]) - 1.0) < 1e-9)
     check("MAE computes correctly",
           abs(mean_absolute_error([2.0, 4.0], [3.0, 4.0]) - 0.5) < 1e-9)
+
+    # 9. extract_json recovers a reply cut off before its final closing brace
+    truncated = (
+        '{"criteria":[{"criterion_id":"definition","max_marks":2.0,'
+        '"awarded":2.0,"justification":"ok"},{"criterion_id":"benefit_1",'
+        '"max_marks":1.5,"awarded":1.5,"justification":"ok"}]'
+    )
+    recovered = extract_json(truncated)
+    check("extract_json repairs JSON missing its final closing brace",
+          len(recovered.get("criteria", [])) == 2
+          and recovered["criteria"][1]["criterion_id"] == "benefit_1")
 
     print(f"\n{len(PASSED)} passed, {len(FAILED)} failed")
     if FAILED:

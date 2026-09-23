@@ -16,6 +16,13 @@ SELF_CONSISTENCY_TOLERANCE = 1.0
 # competence are both weaker. Measure this, then adjust.
 OCR_CONFIDENCE_FLOOR_BY_LANG = {"en": 0.60, "ur": 0.70}
 
+# Teacher-vs-AI discrepancy threshold (marks), per scope doc objective 4.1:
+# "automatically detect mark discrepancies between AI and human examiners
+# and trigger second-marking when the difference exceeds the defined
+# threshold." Distinct from SELF_CONSISTENCY_TOLERANCE, which compares the
+# AI against itself, not against a teacher. Admin-configurable per 6.6.
+DISCREPANCY_THRESHOLD = 1.0
+
 # Answers shorter than this (characters) are treated as blank/unreadable.
 MIN_ANSWER_CHARS = 3
 

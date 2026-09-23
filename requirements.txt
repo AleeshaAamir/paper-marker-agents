@@ -1,5 +1,13 @@
-# The pipeline runs with ZERO dependencies against StubLLM.
-# Install these only when you move to a real model (Phase 2).
-openai>=1.40.0        # also speaks to Ollama / vLLM via base_url
-fastapi>=0.115.0      # Phase 5: expose the pipeline to the .NET backend
-uvicorn>=0.30.0
+# The pipeline itself runs with ZERO dependencies against StubLLM
+# (py -m tests.test_pipeline needs nothing below this line).
+#
+# Everything below is for demo/ - the FastAPI review-portal demo app -
+# and for talking to a real model instead of StubLLM.
+
+openai>=1.40.0        # talks to a real LLM: Ollama / vLLM / hosted API, via base_url
+fastapi>=0.115.0      # demo/app.py web server
+uvicorn>=0.30.0        # ASGI server to run demo/app.py
+python-multipart>=0.0.9  # required by FastAPI for file uploads (image/PDF upload)
+pytesseract>=0.3.10    # OCR - also requires the Tesseract binary installed separately
+Pillow>=10.0.0         # image handling for OCR
+pypdf>=5.0.0           # extracts text from PDF uploads (text-layer PDFs only, not scans)

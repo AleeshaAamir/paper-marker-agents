@@ -1,4 +1,8 @@
 __pycache__/
 *.pyc
+venv/
 .venv/
 .env
+demo/bin/
+node_modules/
+*.jsonl.bak
