@@ -172,7 +172,22 @@ class StubLLM(LLMClient):
         if "CRITIC_AGENT" in system:
             return json.dumps({"verdict": "accept", "reasons": [],
                                "adjusted_total": None})
+        if "QA_SEGMENTATION_AGENT" in system:
+            return self._stub_segment(user)
         return self._stub_evaluation(user)
+
+    def _stub_segment(self, user: str) -> str:
+        """Crude heuristic split at the first '?' - good enough to demo
+        the feature offline without a real model's language understanding."""
+        marker = "Raw OCR text:\n"
+        idx = user.find(marker)
+        text = (user[idx + len(marker):] if idx != -1 else user).strip()
+        q_idx = text.find("?")
+        if q_idx != -1:
+            question, answer = text[:q_idx + 1].strip(), text[q_idx + 1:].strip()
+        else:
+            question, answer = "", text
+        return json.dumps({"question": question, "answer": answer}, ensure_ascii=False)
 
     def _stub_rubric(self) -> str:
         return json.dumps({

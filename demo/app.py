@@ -33,7 +33,7 @@ import config
 from schemas import AnswerSegment
 from llm.client import StubLLM, OpenAICompatibleClient
 from pipeline import MarkingPipeline
-from demo import mailer, ocr
+from demo import mailer, ocr, segment as qa_segment
 from demo.auth import (approve_user, authenticate, domain_hint, get_session,
                        list_pending_approvals, register, reject_user, verify_email)
 
@@ -72,6 +72,16 @@ def _gold_rows():
 
 def _rows():
     return list(reversed(_live_papers)) + _gold_rows()
+
+
+def _visible_rows(session: dict) -> list:
+    """Same source list, narrowed to what this session's role may see."""
+    rows = _rows()
+    if session["role"] == "Teacher":
+        email = session["email"]
+        rows = [r for r in rows
+               if r.get("source", "gold_set") == "gold_set" or r.get("assigned_to") == email]
+    return rows
 
 
 def _segment_from_row(row: dict) -> AnswerSegment:
@@ -230,8 +240,12 @@ def me(session: dict = Depends(require_auth)):
 
 @app.get("/api/segments")
 def list_segments(session: dict = Depends(require_auth)):
+    # A Teacher only sees the fixed sample/gold-set papers (for demo
+    # purposes) plus whatever Admin has specifically assigned them - never
+    # the full system-wide queue.
+    rows = _visible_rows(session)
     out = []
-    for row in _rows():
+    for row in rows:
         decision = _teacher_decisions.get(row["segment_id"])
         out.append({
             "segment_id": row["segment_id"],
@@ -242,6 +256,7 @@ def list_segments(session: dict = Depends(require_auth)):
             "max_marks": row["max_marks"],
             "human_mark": row.get("human_mark"),
             "source": row.get("source", "gold_set"),
+            "assigned_to": row.get("assigned_to"),
             "teacher_decision": decision["action"] if decision else None,
             "triggers_second_marking": bool(decision and decision.get("triggers_second_marking")),
         })
@@ -251,7 +266,7 @@ def list_segments(session: dict = Depends(require_auth)):
 @app.get("/api/mark/{segment_id}")
 def mark_segment(segment_id: str, model: str = "stub",
                  session: dict = Depends(require_auth)):
-    row = next((r for r in _rows() if r["segment_id"] == segment_id), None)
+    row = next((r for r in _visible_rows(session) if r["segment_id"] == segment_id), None)
     if row is None:
         raise HTTPException(404, f"No such segment: {segment_id}")
 
@@ -287,7 +302,7 @@ def mark_segment(segment_id: str, model: str = "stub",
 
 @app.get("/api/verify/{segment_id}")
 def verify_result(segment_id: str, session: dict = Depends(require_auth)):
-    row = next((r for r in _rows() if r["segment_id"] == segment_id), None)
+    row = next((r for r in _visible_rows(session) if r["segment_id"] == segment_id), None)
     if row is None:
         raise HTTPException(404, f"No such segment: {segment_id}")
     decision = _teacher_decisions.get(segment_id)
@@ -303,7 +318,7 @@ def verify_result(segment_id: str, session: dict = Depends(require_auth)):
 
 @app.post("/api/ocr")
 async def run_ocr(file: UploadFile = File(...), language: str = Form("en"),
-                  session: dict = Depends(require_auth)):
+                  model: str = Form("stub"), session: dict = Depends(require_auth)):
     """Demo-only OCR stand-in (see demo/ocr.py) - not the real Scanning
     module. Returns extracted text plus a real confidence score, so the
     existing OCR_CONFIDENCE_FLOOR gate can act on it honestly rather than
@@ -313,7 +328,12 @@ async def run_ocr(file: UploadFile = File(...), language: str = Form("en"),
     directly from the PDF's own text layer - only works for a digitally
     produced PDF, not one that's just a scanned photo with no text layer;
     that case fails with a clear message telling the user to upload the
-    photo directly instead)."""
+    photo directly instead).
+
+    The page is expected to carry BOTH the question and the student's
+    answer - demo/segment.py's QA-segmentation step reads the raw OCR
+    text and splits it into question_text/answer_text automatically, so
+    nobody has to retype the question by hand."""
     raw_bytes = await file.read()
     is_pdf = (file.content_type == "application/pdf"
              or (file.filename or "").lower().endswith(".pdf"))
@@ -321,18 +341,22 @@ async def run_ocr(file: UploadFile = File(...), language: str = Form("en"),
     preview_data_url = None
     try:
         if is_pdf:
-            text, confidence = ocr.extract_pdf_text(raw_bytes)
+            raw_text, confidence = ocr.extract_pdf_text(raw_bytes)
             # No page image to preview - this path never touched pixels.
         else:
-            text, confidence = ocr.run_ocr(raw_bytes, language)
+            raw_text, confidence = ocr.run_ocr(raw_bytes, language)
             preview_mime = file.content_type or "image/jpeg"
             preview_data_url = f"data:{preview_mime};base64,{base64.b64encode(raw_bytes).decode()}"
     except Exception as exc:
         kind = "PDF" if is_pdf else "image"
         raise HTTPException(422, f"OCR failed to read this {kind}: {exc}")
 
+    pipeline = _get_pipeline(model)
+    question_text, answer_text = qa_segment.segment(pipeline.client, raw_text, language)
+
     return {
-        "text": text, "confidence": confidence,
+        "question_text": question_text, "answer_text": answer_text,
+        "confidence": confidence,
         "preview_data_url": preview_data_url,
         "source_type": "pdf" if is_pdf else "image",
     }
@@ -351,11 +375,15 @@ class NewPaper(BaseModel):
 
 
 @app.post("/api/papers")
-def submit_paper(paper: NewPaper, session: dict = Depends(require_auth)):
+def submit_paper(paper: NewPaper, session: dict = Depends(require_admin)):
     """The step that is actually this module's own boundary: a freshly
     scanned/OCR'd answer arrives, gets an Anonymous UUID (never the real
     student identity), and enters the marking queue. Mirrors Scanning
-    Management (6.2) handing off to AI Marking (6.3)."""
+    Management (6.2) handing off to AI Marking (6.3).
+
+    Admin-only: uploading is Admin's job, not a Teacher's - a Teacher's
+    queue only shows papers Admin has assigned to them (see
+    /api/assign/{segment_id})."""
     if paper.language not in ("en", "ur"):
         raise HTTPException(400, "language must be 'en' or 'ur'")
 
@@ -376,8 +404,33 @@ def submit_paper(paper: NewPaper, session: dict = Depends(require_auth)):
         "image_path": paper.image_data_url or "",
         "human_mark": None,
         "source": "live",
+        "assigned_to": None,
     }
     _live_papers.append(row)
+    return row
+
+
+@app.get("/api/teachers")
+def list_teachers(session: dict = Depends(require_admin)):
+    """Approved Teacher accounts, for Admin's assignment dropdown."""
+    from demo.auth import _users  # local import: keep this admin-only listing out of the public auth API surface
+    return [
+        {"email": email, "name": u["name"]}
+        for email, u in _users.items()
+        if u["role"] == "Teacher" and u["status"] == "approved"
+    ]
+
+
+class AssignRequest(BaseModel):
+    teacher_email: Optional[str] = None  # None to unassign
+
+
+@app.post("/api/assign/{segment_id}")
+def assign_paper(segment_id: str, req: AssignRequest, session: dict = Depends(require_admin)):
+    row = next((r for r in _live_papers if r["segment_id"] == segment_id), None)
+    if row is None:
+        raise HTTPException(404, f"No such live paper: {segment_id}")
+    row["assigned_to"] = req.teacher_email
     return row
 
 

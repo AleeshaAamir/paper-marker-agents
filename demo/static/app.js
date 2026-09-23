@@ -1,5 +1,16 @@
+function loadToken() {
+  return localStorage.getItem("pm_token") || sessionStorage.getItem("pm_token") || null;
+}
+function saveToken(token, remember) {
+  (remember ? localStorage : sessionStorage).setItem("pm_token", token);
+}
+function clearToken() {
+  localStorage.removeItem("pm_token");
+  sessionStorage.removeItem("pm_token");
+}
+
 const state = {
-  token: sessionStorage.getItem("pm_token") || null,
+  token: loadToken(),
   user: null,
   segments: [],
   activeId: null,
@@ -104,17 +115,34 @@ async function boot() {
     discrepancyThreshold = c.discrepancy_threshold;
   });
 
-  if (!state.token) { renderLogin(); return; }
+  if (!state.token) { renderLanding(); return; }
   try {
     const res = await fetch("/api/me", { headers: authHeaders() });
     if (!res.ok) throw new Error("bad session");
     state.user = await res.json();
     renderShell();
   } catch {
-    sessionStorage.removeItem("pm_token");
+    clearToken();
     state.token = null;
-    renderLogin();
+    renderLanding();
   }
+}
+
+function renderLanding() {
+  appRoot.innerHTML = "";
+  appRoot.appendChild(document.getElementById("tpl-landing").content.cloneNode(true));
+
+  ["nav-sign-in", "hero-sign-in"].forEach((id) =>
+    document.getElementById(id).addEventListener("click", renderLogin));
+  ["nav-sign-up", "hero-get-started"].forEach((id) =>
+    document.getElementById(id).addEventListener("click", renderRegister));
+
+  document.querySelectorAll(".site-nav-links a").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      document.querySelector(a.getAttribute("href"))?.scrollIntoView({ behavior: "smooth" });
+    });
+  });
 }
 
 function renderLogin() {
@@ -145,6 +173,8 @@ function renderLogin() {
   loginEmailEl.addEventListener("input", validateLoginEmail);
   loginRoleEl.addEventListener("change", validateLoginEmail);
 
+  wirePasswordEye("login-password", "login-password-eye");
+
   const doLogin = async (email, password, role) => {
     const errEl = document.getElementById("login-error");
     errEl.textContent = "";
@@ -162,7 +192,8 @@ function renderLogin() {
       const data = await res.json();
       state.token = data.token;
       state.user = { email: data.email, role: data.role, name: data.name };
-      sessionStorage.setItem("pm_token", state.token);
+      const remember = document.getElementById("login-remember")?.checked || false;
+      saveToken(state.token, remember);
       toast(`Welcome, ${data.name}`, "success");
       renderShell();
     } catch (err) {
@@ -197,19 +228,38 @@ function renderLogin() {
     e.preventDefault();
     renderRegister();
   });
+  document.getElementById("link-back-home-1").addEventListener("click", (e) => {
+    e.preventDefault();
+    renderLanding();
+  });
 }
 
 const EMAIL_FORMAT_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
 function fieldError(inputEl, message) {
-  let err = inputEl.nextElementSibling;
+  // A password field is wrapped in .password-field (input + eye button) -
+  // anchor the error to that wrapper, not between the input and the eye
+  // icon, or it lands inside the wrapper and breaks the layout.
+  const anchor = inputEl.closest(".password-field") || inputEl;
+  let err = anchor.nextElementSibling;
   if (!err || !err.classList || !err.classList.contains("field-error")) {
     err = document.createElement("div");
     err.className = "field-error";
-    inputEl.insertAdjacentElement("afterend", err);
+    anchor.insertAdjacentElement("afterend", err);
   }
   err.textContent = message || "";
   inputEl.style.borderColor = message ? "var(--red)" : "";
+}
+
+function wirePasswordEye(fieldId, eyeId) {
+  const field = document.getElementById(fieldId);
+  const eye = document.getElementById(eyeId);
+  eye.addEventListener("click", () => {
+    const showing = field.type === "text";
+    field.type = showing ? "password" : "text";
+    eye.textContent = showing ? "\u{1F441}️" : "\u{1F576}️";
+    eye.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+  });
 }
 
 async function renderRegister() {
@@ -226,6 +276,9 @@ async function renderRegister() {
   const hintEl = document.getElementById("reg-domain-hint");
   const passEl = document.getElementById("reg-password");
   const confirmEl = document.getElementById("reg-password-confirm");
+
+  wirePasswordEye("reg-password", "reg-password-eye");
+  wirePasswordEye("reg-password-confirm", "reg-password-confirm-eye");
 
   function updateDomainHint() {
     const domain = domains[roleEl.value];
@@ -278,6 +331,12 @@ async function renderRegister() {
     document.getElementById(id).addEventListener("click", (e) => {
       e.preventDefault();
       renderLogin();
+    });
+  });
+  ["link-back-home-2", "link-back-home-3"].forEach((id) => {
+    document.getElementById(id).addEventListener("click", (e) => {
+      e.preventDefault();
+      renderLanding();
     });
   });
 
@@ -363,7 +422,7 @@ function logout() {
   state.user = null;
   state.segments = [];
   state.activeId = null;
-  sessionStorage.removeItem("pm_token");
+  clearToken();
   renderLogin();
 }
 
@@ -387,15 +446,8 @@ function renderShell() {
 
   if (state.user.role === "Student") {
     layout.classList.add("no-sidebar");
-    nav.innerHTML = `
-      <a id="nav-results" class="active">My Results</a>
-      <a id="nav-verify">Verify Mark</a>
-      <a id="nav-profile">Profile</a>`;
+    nav.innerHTML = `<a id="nav-results" class="active">My Results</a>`;
     document.getElementById("nav-results").addEventListener("click", showStudentResults);
-    document.getElementById("nav-verify").addEventListener("click", () =>
-      toast("Use the Verify button on a result card below.", "info"));
-    document.getElementById("nav-profile").addEventListener("click", () =>
-      toast("Not part of this demo.", "info"));
     showStudentResults();
   } else {
     renderSidebar();
@@ -407,21 +459,28 @@ function renderShell() {
 
 function renderSidebar() {
   const sidebar = document.getElementById("app-sidebar");
-  const adminBtn = state.user.role === "Admin"
+  const isAdmin = state.user.role === "Admin";
+
+  // Uploading is Admin's job only - a Teacher only ever sees papers Admin
+  // has assigned to them, never an upload button of their own.
+  const uploadBtn = isAdmin
+    ? `<button class="btn-upload-new" id="btn-new-paper">
+         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+         Upload New Paper
+       </button>`
+    : "";
+  const adminBtn = isAdmin
     ? `<button class="btn-upload-new" id="btn-pending-approvals" style="background:var(--purple);margin-bottom:10px">
          Pending Registrations <span id="pending-count"></span>
        </button>`
     : "";
   sidebar.innerHTML = `
     ${adminBtn}
-    <button class="btn-upload-new" id="btn-new-paper">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-      Upload New Paper
-    </button>
-    <div class="sidebar-label">Marking Queue</div>
+    ${uploadBtn}
+    <div class="sidebar-label">${isAdmin ? "All Papers" : "My Assigned Papers"}</div>
     <div id="queue" class="queue-list"></div>`;
-  document.getElementById("btn-new-paper").addEventListener("click", showUploadForm);
-  if (state.user.role === "Admin") {
+  if (isAdmin) {
+    document.getElementById("btn-new-paper").addEventListener("click", showUploadForm);
     document.getElementById("btn-pending-approvals").addEventListener("click", showPendingApprovals);
     refreshPendingCount();
   }
@@ -521,14 +580,31 @@ async function showDashboard() {
   const pending = state.segments.filter((s) => !s.teacher_decision).length;
   const submitted = state.segments.filter((s) => s.teacher_decision === "accept" || s.teacher_decision === "adjust").length;
 
-  const rows = state.segments.map((seg) => `
+  let teachers = [];
+  if (isAdmin) {
+    try { teachers = await (await api("/api/teachers")).json(); } catch { /* non-critical */ }
+  }
+  const teacherName = (email) => (teachers.find((t) => t.email === email) || {}).name;
+
+  const rows = state.segments.map((seg) => {
+    const assignCell = isAdmin
+      ? (seg.source === "live"
+          ? `<select class="assign-select" data-id="${seg.segment_id}">
+               <option value="">Unassigned</option>
+               ${teachers.map((t) => `<option value="${t.email}" ${seg.assigned_to === t.email ? "selected" : ""}>${escapeHtml(t.name)}</option>`).join("")}
+             </select>`
+          : `<span class="confidence-pill">Sample data</span>`)
+      : "";
+    return `
     <tr>
       <td><b>${seg.segment_id}</b></td>
       <td dir="auto">${escapeHtml(seg.question_text || seg.question_id)}</td>
       <td><span class="badge lang-${seg.language}">${seg.language.toUpperCase()}</span></td>
       <td><span class="badge ${statusClass(seg)}">${statusLabelFor(seg)}</span></td>
+      ${isAdmin ? `<td>${assignCell}</td>` : ""}
       <td><button class="action-btn" data-id="${seg.segment_id}">${actionLabelFor(seg)}</button></td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 
   document.getElementById("main-content").innerHTML = `
     <div class="dash-greeting">
@@ -543,14 +619,28 @@ async function showDashboard() {
       <div class="stat-tile t-green"><div class="num">${submitted}</div><div class="label">Submitted</div></div>
     </div>
     <div class="queue-table-wrap">
-      <div class="queue-table-head">${isAdmin ? "All Papers - System-wide Overview" : "Assigned Papers Queue"}</div>
+      <div class="queue-table-head">${isAdmin ? "All Papers - System-wide Overview" : "My Assigned Papers"}</div>
       ${total === 0
-        ? '<div class="empty-state">No papers yet. Use "Upload New Paper" to add one.</div>'
-        : `<table class="papers-table"><thead><tr><th>Segment ID</th><th>Question</th><th>Lang</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`}
+        ? `<div class="empty-state">${isAdmin ? 'No papers yet. Use "Upload New Paper" to add one.' : "No papers assigned to you yet - check back once Admin assigns some."}</div>`
+        : `<table class="papers-table"><thead><tr><th>Segment ID</th><th>Question</th><th>Lang</th><th>Status</th>${isAdmin ? "<th>Assigned To</th>" : ""}<th>Action</th></tr></thead><tbody>${rows}</tbody></table>`}
     </div>`;
 
   document.querySelectorAll(".action-btn").forEach((btn) =>
     btn.addEventListener("click", () => showMarking(btn.dataset.id)));
+
+  document.querySelectorAll(".assign-select").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      const segId = sel.dataset.id;
+      const teacherEmail = sel.value || null;
+      const res = await api(`/api/assign/${segId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teacher_email: teacherEmail }),
+      });
+      if (!res.ok) { toast("Failed to assign: " + (await res.text()), "error"); return; }
+      toast(teacherEmail ? `Assigned to ${teacherName(teacherEmail) || teacherEmail}` : "Unassigned", "success");
+    });
+  });
 }
 
 // --- marking / review view -----------------------------------------------
@@ -794,13 +884,18 @@ async function submitDecision(id, action, adjustedTotal, aiTotal) {
 // --- upload view -----------------------------------------------------
 
 function showUploadForm() {
+  if (state.user.role !== "Admin") {
+    toast("Only Admin can upload papers.", "error");
+    showDashboard();
+    return;
+  }
   state.activeId = null;
   renderQueue();
 
   document.getElementById("main-content").innerHTML = `
     <div class="upload-card">
       <h2>Upload an Answer Sheet</h2>
-      <p class="upload-sub">Upload a photo or PDF to run OCR automatically, or type the answer directly. Submitting generates an Anonymous UUID and sends it straight through the AI Marking pipeline.</p>
+      <p class="upload-sub">Upload a photo or PDF showing both the question and the student's answer on one page. The AI reads the page, separates the question from the answer, and generates the Anonymous UUID automatically - nothing to retype.</p>
 
       <div class="dropzone" id="dropzone">
         <input type="file" id="f-image" accept="image/*,application/pdf,.pdf" hidden>
@@ -818,7 +913,7 @@ function showUploadForm() {
         <div class="form-field"><label>Language</label>
           <select class="form-input" id="f-language"><option value="en">English</option><option value="ur">Urdu</option></select>
         </div>
-        <div class="form-field span-2"><label>Question <span class="hint">(optional &mdash; leave blank to just upload and review)</span></label><textarea id="f-question" dir="auto" placeholder="Question text (optional)"></textarea></div>
+        <div class="form-field span-2"><label>Question <span class="hint">auto-extracted by AI from the uploaded page &mdash; editable</span></label><textarea id="f-question" dir="auto" placeholder="Auto-filled after upload (or type/paste directly)"></textarea></div>
         <div class="form-field"><label>Max Marks</label><input type="number" id="f-max-marks" value="5" min="1" step="0.5"></div>
         <div class="form-field"><label>OCR Confidence <span class="hint">(0-1)</span></label><input type="number" id="f-ocr-confidence" value="0.95" min="0" max="1" step="0.01"></div>
         <div class="form-field span-2"><label>Marking Scheme <span class="hint">(optional)</span></label><textarea id="f-scheme" dir="auto" placeholder="e.g. 2 marks for definition, 3 marks for example"></textarea></div>
@@ -870,10 +965,11 @@ function showUploadForm() {
       }
       const language = document.getElementById("f-language").value;
       form.append("language", language);
+      form.append("model", document.getElementById("model").value);
 
       const res = await api("/api/ocr", { method: "POST", body: form });
       if (!res.ok) { status.textContent = "OCR failed: " + (await res.text()); status.style.color = "var(--red)"; return; }
-      const { text, confidence, preview_data_url, source_type } = await res.json();
+      const { question_text, answer_text, confidence, preview_data_url, source_type } = await res.json();
 
       state.pendingImageDataUrl = preview_data_url;
       if (preview_data_url) {
@@ -885,14 +981,18 @@ function showUploadForm() {
         dzEmpty.innerHTML = `<div><b>${escapeHtml(file.name)}</b> uploaded</div><div class="hint">Text extracted from the PDF's text layer</div>`;
       }
 
-      document.getElementById("f-answer").value = text;
+      // The agent reads the page and separates question from answer itself -
+      // both fields are auto-filled, nothing to retype.
+      document.getElementById("f-question").value = question_text;
+      document.getElementById("f-answer").value = answer_text;
       document.getElementById("f-ocr-confidence").value = confidence.toFixed(2);
       const pct = Math.round(confidence * 100);
-      const words = text.split(/\s+/).filter(Boolean).length;
+      const words = answer_text.split(/\s+/).filter(Boolean).length;
       const sourceNote = source_type === "pdf"
         ? " - extracted directly from the PDF's text layer, not OCR'd"
         : " (Tesseract OCR - works best on printed text)";
-      status.textContent = `Extracted ${words} word(s) at ${pct}% confidence${sourceNote}. Review the answer below before submitting.`;
+      const qNote = question_text ? "Question and answer separated automatically." : "No separate question detected - only an answer was found.";
+      status.textContent = `${qNote} ${words} answer word(s) at ${pct}% confidence${sourceNote}. Review both fields below before submitting.`;
       status.style.color = confidence < 0.6 ? "var(--amber)" : "var(--text-faint)";
     } catch (err) {
       if (String(err) !== "Error: unauthenticated") { status.textContent = "Could not process this file: " + err; status.style.color = "var(--red)"; }
@@ -979,54 +1079,25 @@ async function showStudentResults() {
       return;
     }
 
-    const cards = await Promise.all(reviewed.map(async (seg, i) => {
+    // Students see only their numbers - no per-criterion breakdown,
+    // justification text, or verification reference. Just the score.
+    const cards = await Promise.all(reviewed.map(async (seg) => {
       const res = await api(`/api/mark/${seg.segment_id}?model=stub`);
       const data = await res.json();
       const final = data.teacher_decision && data.teacher_decision.action === "adjust"
         ? data.teacher_decision.adjusted_total : data.total_awarded;
-      const pct = Math.round((final / data.max_marks) * 100);
-      const rows = data.scores.map((s) => `
-        <tr><td>${s.criterion_id}</td><td>${s.max_marks}</td><td>${s.awarded}</td><td>${escapeHtml(s.justification).slice(0, 60)}${s.justification.length > 60 ? "…" : ""}</td></tr>
-      `).join("");
       return `
-        <div class="result-card">
-          <div class="result-head ${i % 2 ? "blue" : ""}">
-            <span dir="auto">${escapeHtml(data.question_text).slice(0, 40)}${data.question_text.length > 40 ? "…" : ""}</span>
-            <span class="verified-badge">${data.teacher_decision.action === "flag" ? "UNDER REVIEW" : "VERIFIED"}</span>
-          </div>
-          <div class="result-body">
-            <div class="score-row">
-              <div><div class="score-num">${final}</div><div class="score-of">/ ${data.max_marks}</div></div>
-              <div class="progress-bar"><div class="fill" style="width:${pct}%"></div></div>
-            </div>
-            <div class="result-meta">
-              <span>Grade: <b>${pct}%</b></span>
-              <span>Examiner: <b>Anonymous</b></span>
-              <span>Lang: <b>${seg.language.toUpperCase()}</b></span>
-            </div>
-            <table class="result-table"><thead><tr><th>Criterion</th><th>Max</th><th>Final</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table>
-            <div class="verify-box">
-              <span>Ref: ${data.verification_reference}</span>
-              <button class="btn-verify" data-id="${seg.segment_id}">Verify</button>
-            </div>
-          </div>
+        <div class="score-card">
+          <div class="score-card-label" dir="auto">${escapeHtml(seg.question_text || seg.question_id)}</div>
+          <div class="score-card-num">${final}<span class="score-card-of"> / ${data.max_marks}</span></div>
         </div>`;
     }));
 
     document.getElementById("main-content").innerHTML = `
       <div class="results-toolbar">
-        <div><h2>My Exam Results</h2><p>Per-question marks and AI assessment for your reviewed exams.</p></div>
+        <div><h2>My Results</h2></div>
       </div>
       <div class="results-grid">${cards.join("")}</div>`;
-
-    document.querySelectorAll(".btn-verify").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const res = await api(`/api/verify/${btn.dataset.id}`);
-        if (!res.ok) { toast("Could not verify: " + (await res.text()), "error"); return; }
-        const data = await res.json();
-        toast(`Verified - reference ${data.reference} matches the stored record.`, "success");
-      });
-    });
   } catch (err) {
     if (String(err) !== "Error: unauthenticated") {
       document.getElementById("main-content").innerHTML = `<div class="empty-state">Could not load results: ${escapeHtml(String(err))}</div>`;
