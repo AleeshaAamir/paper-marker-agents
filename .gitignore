@@ -3,6 +3,10 @@ __pycache__/
 venv/
 .venv/
 .env
-demo/bin/
 node_modules/
 *.jsonl.bak
+
+# cloudflared tunnel binary (repo-root bin/) and .NET build output
+# (backend/bin/, backend/obj/) - both named "bin", ignore either way
+bin/
+obj/
