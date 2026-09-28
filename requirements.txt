@@ -1,12 +1,12 @@
 # The pipeline itself runs with ZERO dependencies against StubLLM
 # (py -m tests.test_pipeline needs nothing below this line).
 #
-# Everything below is for demo/ - the FastAPI review-portal demo app -
+# Everything below is for ai-service/ - the AI Marking microservice -
 # and for talking to a real model instead of StubLLM.
 
 openai>=1.40.0        # talks to a real LLM: Ollama / vLLM / hosted API, via base_url
-fastapi>=0.115.0      # demo/app.py web server
-uvicorn>=0.30.0        # ASGI server to run demo/app.py
+fastapi>=0.115.0      # ai-service/app.py web server
+uvicorn>=0.30.0        # ASGI server to run ai-service/app.py
 python-multipart>=0.0.9  # required by FastAPI for file uploads (image/PDF upload)
 pytesseract>=0.3.10    # OCR - also requires the Tesseract binary installed separately
 Pillow>=10.0.0         # image handling for OCR
