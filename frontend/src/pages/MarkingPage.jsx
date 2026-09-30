@@ -24,6 +24,7 @@ export default function MarkingPage({ segmentId, onBack, onNextPaper }) {
   const [busy, setBusy] = useState(false);
 
   const isSupervisor = user.role === "Supervisor";
+  const isAdmin = user.role === "Admin";
   const idx = segments.findIndex((s) => s.segment_id === segmentId);
   const seg = segments.find((s) => s.segment_id === segmentId);
   const decision = seg ? seg.teacher_decision : null;
@@ -173,11 +174,20 @@ export default function MarkingPage({ segmentId, onBack, onNextPaper }) {
           </section>
 
           <section className="panel">
-            <div className="panel-head"><h2>Examiner Inputs</h2></div>
+            <div className="panel-head"><h2>{isAdmin ? "AI Marks (View Only)" : "Examiner Inputs"}</h2></div>
             <div className="body-pad">
               <div className="status-line">Status: <b>{statusDisplay}</b></div>
 
-              {isSupervisor ? (
+              {isAdmin ? (
+                <>
+                  <div className="decision-note" style={{ marginTop: 12 }}>
+                    {decision
+                      ? <>This paper's mark was reviewed by its Teacher: <b>{decision.toUpperCase()}</b>. Admin marks are view-only - editing a mark is the Teacher's job, and finalizing it after review is the Supervisor's.</>
+                      : <>This paper hasn't been reviewed by a Teacher yet. Assign it to a Teacher from the Dashboard so they can accept, adjust, or flag the AI's mark - Admin doesn't edit marks directly.</>}
+                  </div>
+                  <button className="next-btn" style={{ marginTop: 12 }} onClick={onBack}>&larr; BACK TO DASHBOARD</button>
+                </>
+              ) : isSupervisor ? (
                 <>
                   {!decision ? (
                     <div id="decision-note" className="decision-note" style={{ marginTop: 12 }}>

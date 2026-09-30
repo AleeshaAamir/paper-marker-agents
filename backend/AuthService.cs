@@ -88,6 +88,12 @@ public class AuthService
         return (code, null);
     }
 
+    /// <summary>Removes a pending registration - used when the verification
+    /// email genuinely fails to send, so the person isn't stuck unable to
+    /// register again with the same address.</summary>
+    public void CancelPendingRegistration(string email) =>
+        _pendingVerification.TryRemove(email.Trim().ToLowerInvariant(), out _);
+
     /// <summary>Returns (status, error) - exactly one is non-null.</summary>
     public (string? Status, string? Error) VerifyEmail(string email, string code)
     {

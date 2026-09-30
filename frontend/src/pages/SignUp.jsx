@@ -23,8 +23,6 @@ export default function SignUp({ onBackHome, onGoLogin }) {
   const [busy, setBusy] = useState(false);
 
   const [pendingEmail, setPendingEmail] = useState("");
-  const [verifyTargetText, setVerifyTargetText] = useState("");
-  const [demoMailNote, setDemoMailNote] = useState(null);
   const [code, setCode] = useState("");
 
   useEffect(() => {
@@ -72,17 +70,6 @@ export default function SignUp({ onBackHome, onGoLogin }) {
       const data = await res.json();
       if (!res.ok) { setRegisterError(data.detail || "Registration failed."); return; }
 
-      if (data.email_sent) {
-        setVerifyTargetText(`A verification code was emailed to ${data.email} - check your inbox.`);
-        setDemoMailNote(<><b>Real email sent.</b> Check the inbox (and spam folder) for <b>{data.email}</b>.</>);
-      } else {
-        setVerifyTargetText(`We've "sent" a code to ${data.email}`);
-        setDemoMailNote(<>
-          <b>Demo mode:</b> real email delivery isn't configured for this address, so here's the code it would have sent:
-          <span className="code">{data.demo_verification_code}</span>
-          In the live system this arrives by email instead.
-        </>);
-      }
       setPendingEmail(data.email);
       setStep("verify");
     } catch (err) {
@@ -191,8 +178,7 @@ export default function SignUp({ onBackHome, onGoLogin }) {
           ) : (
             <div>
               <h2>Verify Your Email</h2>
-              <p className="login-sub">{verifyTargetText}</p>
-              <div className="demo-mail-note">{demoMailNote}</div>
+              <p className="login-sub">A verification code was emailed to {pendingEmail} - check your inbox (and spam folder).</p>
 
               <form onSubmit={submitVerify}>
                 <div className="form-field">

@@ -98,6 +98,17 @@ app.MapGet("/", () => Results.Ok(new { service = "Paper Marker API", status = "r
     return (session, null);
 }
 
+(SessionRecord? Session, IResult? Error) RequireTeacher(HttpRequest req, AuthService auth)
+{
+    var (session, error) = RequireAuth(req, auth);
+    if (error != null) return (null, error);
+    // Admin uploads/assigns papers, a Supervisor audits after the fact -
+    // recording a mark decision is specifically the Teacher's job. Admin
+    // can see the AI's marks but must not edit them.
+    if (session!.Role != "Teacher") return (null, Results.Json(new { detail = "Teacher access required." }, statusCode: 403));
+    return (session, null);
+}
+
 // --- auth / registration ---------------------------------------------------
 
 app.MapPost("/api/login", (LoginRequest req, AuthService auth) =>
@@ -131,10 +142,23 @@ app.MapPost("/api/register", (RegisterRequest req, AuthService auth, MailerServi
 
     var email = req.Email.Trim().ToLowerInvariant();
     papers.LogActivity(email, "registration submitted", $"role: {req.Role}");
-    var sent = mailer.SendVerificationEmail(email, req.Name, code);
-    if (sent) return Results.Ok(new { email, email_sent = true });
-    // SMTP not configured - fall back to showing the code on-screen.
-    return Results.Ok(new { email, email_sent = false, demo_verification_code = code });
+
+    // The verification code only ever goes to the real inbox - never shown
+    // on screen. If it genuinely can't be sent (SMTP not configured, or
+    // delivery failed), that's a real registration failure, not a silent
+    // fallback - the pending registration is cancelled so the same email
+    // can be tried again cleanly.
+    if (!mailer.SendVerificationEmail(email, req.Name, code))
+    {
+        auth.CancelPendingRegistration(email);
+        return Results.Json(new
+        {
+            detail = mailer.IsConfigured
+                ? "Could not send the verification email. Check the address and try again."
+                : "Email delivery isn't configured on this server yet - registration can't be completed. Contact the Admin.",
+        }, statusCode: 502);
+    }
+    return Results.Ok(new { email, email_sent = true });
 });
 
 app.MapPost("/api/verify-email", (VerifyEmailRequest req, AuthService auth) =>
@@ -394,7 +418,7 @@ var validDecisionActions = new HashSet<string> { "accept", "adjust", "flag" };
 
 app.MapPost("/api/decision/{segmentId}", (string segmentId, DecisionRequest decision, HttpRequest req, AuthService auth, PapersService papers) =>
 {
-    var (session, error) = RequireAuth(req, auth);
+    var (session, error) = RequireTeacher(req, auth);
     if (error != null) return error;
 
     if (!validDecisionActions.Contains(decision.Action))

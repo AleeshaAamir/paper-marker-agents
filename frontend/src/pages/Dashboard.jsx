@@ -20,11 +20,16 @@ export default function Dashboard({ search, onOpenPaper }) {
   const submitted = segments.filter((s) => s.teacher_decision === "accept" || s.teacher_decision === "adjust").length;
   const nextUndecided = segments.find((s) => !s.teacher_decision);
 
+  const term = (search || "").toLowerCase().trim();
   const rows = useMemo(() => {
-    const term = (search || "").toLowerCase();
     const bySearch = (s) => !term || s.segment_id.toLowerCase().includes(term) || (s.question_text || s.question_id || "").toLowerCase().includes(term);
-    return segments.filter((s) => dashboardBucket(s) === tab).filter(bySearch);
-  }, [segments, tab, search]);
+    // While actively searching, look across every tab - a paper you're
+    // searching for by ID might already be in "Recently Completed", not
+    // whichever tab happens to be selected, and "search finds nothing"
+    // is a worse experience than "search ignores the tab filter."
+    const byTab = (s) => term || dashboardBucket(s) === tab;
+    return segments.filter(byTab).filter(bySearch);
+  }, [segments, tab, term]);
 
   async function assign(segId, teacherEmail) {
     const res = await call(`/api/assign/${segId}`, {
