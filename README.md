@@ -153,16 +153,23 @@ in the dropdown, which requires:
 Real marking is much slower than the stub (seconds to a couple of
 minutes per paper, depending on your machine), especially without a GPU.
 
-## Running the offline tests
+## Running the automated tests
+
+Each service has its own test suite, and none of them need the other
+services running:
 
 ```
-cd ai-service
-../venv/Scripts/python -m tests.test_pipeline
-```
+# AI pipeline (13 tests) - marks never exceed max, OCR-confidence
+# gating, discrepancy detection, etc.
+cd ai-service && ../venv/Scripts/python -m tests.test_pipeline
 
-Should show `13 passed, 0 failed`. These test the pipeline's hard
-guarantees (marks never exceed max, OCR-confidence gating, etc.) and
-don't need any of the three services running.
+# Backend (27 tests) - auth, password hashing, role-based visibility,
+# discrepancy detection, supervisor approval
+cd backend.Tests && dotnet test
+
+# Frontend (19 tests) - status/label logic, grading bands, avatar initials
+cd frontend && npm test
+```
 
 ## Troubleshooting
 

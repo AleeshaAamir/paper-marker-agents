@@ -30,19 +30,26 @@ public class AuthService
     private static readonly Regex EmailRe = new(
         @"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", RegexOptions.Compiled);
 
+    // How long an idle session stays valid before requiring a fresh login -
+    // real risk for a real deployment (a forgotten logged-in session on a
+    // shared lab/exam-center computer), not just demo polish.
+    private static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(8);
+
     // Pre-seeded accounts: root Admin and Supervisor (can't self-register),
     // plus one already-approved demo Teacher/Student so quick-login and
     // manual sign-in both work without forcing a fresh registration.
+    // Passwords are hashed even for these fixed demo accounts (PBKDF2, see
+    // PasswordHasher) - nothing in this store is ever plain text.
     private readonly ConcurrentDictionary<string, UserRecord> _users = new(new[]
     {
-        KeyValuePair.Create("admin@gmail.com", new UserRecord { Password = "admin123", Role = "Admin", Name = "System Admin", Status = "approved" }),
-        KeyValuePair.Create("supervisor@gmail.com", new UserRecord { Password = "supervisor123", Role = "Supervisor", Name = "Demo Supervisor", Status = "approved" }),
-        KeyValuePair.Create("teacher.demo@gmail.com", new UserRecord { Password = "teacher123", Role = "Teacher", Name = "Demo Teacher", Status = "approved" }),
-        KeyValuePair.Create("student.demo@gmail.com", new UserRecord { Password = "student123", Role = "Student", Name = "Demo Student", Status = "approved" }),
+        KeyValuePair.Create("admin@gmail.com", new UserRecord { Password = PasswordHasher.Hash("admin123"), Role = "Admin", Name = "System Admin", Status = "approved" }),
+        KeyValuePair.Create("supervisor@gmail.com", new UserRecord { Password = PasswordHasher.Hash("supervisor123"), Role = "Supervisor", Name = "Demo Supervisor", Status = "approved" }),
+        KeyValuePair.Create("teacher.demo@gmail.com", new UserRecord { Password = PasswordHasher.Hash("teacher123"), Role = "Teacher", Name = "Demo Teacher", Status = "approved" }),
+        KeyValuePair.Create("student.demo@gmail.com", new UserRecord { Password = PasswordHasher.Hash("student123"), Role = "Student", Name = "Demo Student", Status = "approved" }),
     });
 
     private readonly ConcurrentDictionary<string, PendingVerification> _pendingVerification = new();
-    private readonly ConcurrentDictionary<string, SessionRecord> _sessions = new();
+    private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
 
     public string DomainHint(string role) => RoleDomains.GetValueOrDefault(role, "");
 
@@ -72,9 +79,11 @@ public class AuthService
             return (null, "Password must be at least 6 characters.");
 
         var code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
+        // Hash immediately - plain text never sits in memory beyond this
+        // one call, not even in the pending-verification record.
         _pendingVerification[email] = new PendingVerification
         {
-            Code = code, Name = name.Trim(), Password = password, Role = role,
+            Code = code, Name = name.Trim(), Password = PasswordHasher.Hash(password), Role = role,
         };
         return (code, null);
     }
@@ -122,7 +131,7 @@ public class AuthService
         if (RoleDomains.ContainsKey(role) && !ValidDomain(email, role))
             return (null, $"{role} accounts must use an @{RoleDomains[role]} email address.");
 
-        if (!_users.TryGetValue(email, out var user) || user.Password != password || user.Role != role)
+        if (!_users.TryGetValue(email, out var user) || user.Role != role || !PasswordHasher.Verify(password, user.Password))
             return (null, "Invalid email, password, or role.");
         if (user.Status == "pending_approval")
             return (null, "Your account is awaiting Admin approval.");
@@ -131,15 +140,26 @@ public class AuthService
 
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var session = new SessionRecord { Email = email, Role = user.Role, Name = user.Name };
-        _sessions[token] = session;
+        _sessions[token] = new SessionEntry { Session = session, ExpiresAt = DateTime.UtcNow.Add(SessionLifetime) };
         return ((token, session), null);
     }
 
-    public SessionRecord? GetSession(string token) => _sessions.GetValueOrDefault(token);
+    /// <summary>Null if the token doesn't exist OR has expired - an expired
+    /// session is deleted on first access rather than left around.</summary>
+    public SessionRecord? GetSession(string token)
+    {
+        if (!_sessions.TryGetValue(token, out var entry)) return null;
+        if (entry.ExpiresAt < DateTime.UtcNow)
+        {
+            _sessions.TryRemove(token, out _);
+            return null;
+        }
+        return entry.Session;
+    }
 
     /// <summary>Approved Teacher accounts, for Admin's assignment dropdown.</summary>
-    public List<object> ListTeachers() =>
+    public List<TeacherInfo> ListTeachers() =>
         _users.Where(kv => kv.Value.Role == "Teacher" && kv.Value.Status == "approved")
-              .Select(kv => (object)new { email = kv.Key, name = kv.Value.Name })
+              .Select(kv => new TeacherInfo(kv.Key, kv.Value.Name))
               .ToList();
 }

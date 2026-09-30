@@ -40,6 +40,29 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 app.UseCors(CorsPolicy);
 
+// Safety net for real use: any exception that isn't specifically handled
+// below (a bug, a library throwing something unexpected) still returns a
+// clean JSON error instead of a raw stack trace or a hung connection. The
+// full exception is logged server-side either way.
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next(context);
+    }
+    catch (Exception exc)
+    {
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogError(exc, "Unhandled exception on {Path}", context.Request.Path);
+        if (!context.Response.HasStarted)
+        {
+            context.Response.StatusCode = 500;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("{\"detail\":\"Something went wrong on the server. Please try again.\"}");
+        }
+    }
+});
+
 // This is a pure API now - the real UI is the React app in frontend/,
 // served by its own dev server (npm run dev, port 5173) or built and
 // hosted separately. No static file serving lives here any more.
@@ -214,7 +237,16 @@ app.MapGet("/api/mark/{segmentId}", async (string segmentId, string model, HttpR
     }
     catch (HttpRequestException exc)
     {
-        return Results.Json(new { detail = $"AI marking service error: {exc.Message}" }, statusCode: 502);
+        // ai-service is down, refused the connection, or returned a non-2xx
+        // status - this must never surface as a hung request or a blank
+        // page to a real marking teacher.
+        return Results.Json(new { detail = $"The AI marking service is unavailable right now: {exc.Message}" }, statusCode: 502);
+    }
+    catch (TaskCanceledException)
+    {
+        // ai-service is up but not responding within the configured
+        // timeout - distinct from "down", worth telling the user which one.
+        return Results.Json(new { detail = "The AI marking service timed out. It may be overloaded - please try again." }, statusCode: 504);
     }
 
     var response = new Dictionary<string, object?>();
@@ -254,35 +286,45 @@ app.MapGet("/api/verify/{segmentId}", (string segmentId, HttpRequest req, AuthSe
     });
 });
 
+const long MaxUploadBytes = 15 * 1024 * 1024; // 15MB - generous for a phone photo of one page, not unbounded
+
 app.MapPost("/api/ocr", async (HttpRequest req, AuthService auth, AiServiceClient ai) =>
 {
     var (_, error) = RequireAuth(req, auth);
     if (error != null) return error;
 
+    if (req.ContentLength is > MaxUploadBytes)
+        return Results.Json(new { detail = "File is too large (max 15MB)." }, statusCode: 413);
+
     var form = await req.ReadFormAsync();
     var file = form.Files["file"];
     if (file is null) return Results.Json(new { detail = "No file uploaded." }, statusCode: 422);
+    if (file.Length == 0) return Results.Json(new { detail = "The uploaded file is empty." }, statusCode: 422);
+    if (file.Length > MaxUploadBytes) return Results.Json(new { detail = "File is too large (max 15MB)." }, statusCode: 413);
     var language = form["language"].FirstOrDefault() ?? "en";
     var model = form["model"].FirstOrDefault() ?? "stub";
 
     using var ms = new MemoryStream();
     await file.CopyToAsync(ms);
 
-    JsonElement ocrResult;
+    JsonElement ocrResult, segmented;
     try
     {
         ocrResult = await ai.OcrAsync(ms.ToArray(), file.FileName, file.ContentType, language);
+        var rawText = ocrResult.GetProperty("raw_text").GetString() ?? "";
+        segmented = await ai.SegmentAsync(rawText, language, model);
     }
     catch (HttpRequestException exc)
     {
         return Results.Json(new { detail = $"OCR failed: {exc.Message}" }, statusCode: 422);
     }
+    catch (TaskCanceledException)
+    {
+        return Results.Json(new { detail = "OCR timed out - try a smaller or clearer image." }, statusCode: 504);
+    }
 
-    var rawText = ocrResult.GetProperty("raw_text").GetString() ?? "";
     var confidence = ocrResult.GetProperty("confidence").GetDouble();
     var sourceType = ocrResult.GetProperty("source_type").GetString();
-
-    var segmented = await ai.SegmentAsync(rawText, language, model);
     var previewDataUrl = sourceType == "pdf"
         ? null
         : $"data:{(string.IsNullOrEmpty(file.ContentType) ? "image/jpeg" : file.ContentType)};base64,{Convert.ToBase64String(ms.ToArray())}";
@@ -303,6 +345,12 @@ app.MapPost("/api/papers", (NewPaperRequest paper, HttpRequest req, AuthService 
     if (error != null) return error;
     if (paper.Language != "en" && paper.Language != "ur")
         return Results.Json(new { detail = "language must be 'en' or 'ur'" }, statusCode: 400);
+    if (paper.MaxMarks <= 0 || paper.MaxMarks > 1000)
+        return Results.Json(new { detail = "max_marks must be a positive number (up to 1000)." }, statusCode: 400);
+    if (paper.OcrConfidence < 0 || paper.OcrConfidence > 1)
+        return Results.Json(new { detail = "ocr_confidence must be between 0 and 1." }, statusCode: 400);
+    if (string.IsNullOrWhiteSpace(paper.OcrText))
+        return Results.Json(new { detail = "ocr_text (the student's answer) cannot be empty." }, statusCode: 400);
 
     var row = papers.AddLivePaper(paper);
     return Results.Ok(new
@@ -327,6 +375,14 @@ app.MapPost("/api/assign/{segmentId}", (string segmentId, AssignRequest body, Ht
 {
     var (_, error) = RequireAdmin(req, auth);
     if (error != null) return error;
+
+    if (body.TeacherEmail is not null)
+    {
+        var isRealApprovedTeacher = auth.ListTeachers().Any(t => t.Email == body.TeacherEmail);
+        if (!isRealApprovedTeacher)
+            return Results.Json(new { detail = "That email is not an approved Teacher account." }, statusCode: 400);
+    }
+
     var row = papers.AssignPaper(segmentId, body.TeacherEmail);
     if (row is null) return Results.Json(new { detail = $"No such live paper: {segmentId}" }, statusCode: 404);
     return Results.Ok(new { segment_id = row.SegmentId, assigned_to = row.AssignedTo });
@@ -334,10 +390,26 @@ app.MapPost("/api/assign/{segmentId}", (string segmentId, AssignRequest body, Ht
 
 app.MapGet("/api/config", () => Results.Ok(new { discrepancy_threshold = DiscrepancyThreshold }));
 
+var validDecisionActions = new HashSet<string> { "accept", "adjust", "flag" };
+
 app.MapPost("/api/decision/{segmentId}", (string segmentId, DecisionRequest decision, HttpRequest req, AuthService auth, PapersService papers) =>
 {
     var (session, error) = RequireAuth(req, auth);
     if (error != null) return error;
+
+    if (!validDecisionActions.Contains(decision.Action))
+        return Results.Json(new { detail = "action must be 'accept', 'adjust', or 'flag'." }, statusCode: 400);
+
+    var row = papers.FindVisible(session!, segmentId);
+    if (row is null) return Results.Json(new { detail = $"No such segment: {segmentId}" }, statusCode: 404);
+
+    if (decision.Action == "adjust")
+    {
+        if (decision.AdjustedTotal is null)
+            return Results.Json(new { detail = "adjusted_total is required for an 'adjust' decision." }, statusCode: 400);
+        if (decision.AdjustedTotal < 0 || decision.AdjustedTotal > row.MaxMarks)
+            return Results.Json(new { detail = $"adjusted_total must be between 0 and {row.MaxMarks}." }, statusCode: 400);
+    }
 
     var record = papers.RecordDecision(segmentId, decision, DiscrepancyThreshold);
     var detail = segmentId + (record.TriggersSecondMarking ? " (second marking triggered)" : "");

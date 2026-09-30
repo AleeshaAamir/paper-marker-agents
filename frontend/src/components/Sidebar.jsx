@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useApp } from "../AppContext";
 import { ICON, initials } from "../icons";
 import { statusClass, statusLabelFor } from "../helpers";
@@ -14,8 +15,9 @@ const NAV_BY_ROLE = {
   Supervisor: [{ id: "audit", label: "Audit & Approval Queue", icon: ICON.audit }],
 };
 
-export default function Sidebar({ view, onNav, onOpenPaper }) {
+export default function Sidebar({ view, onOpenPaper }) {
   const { user, segments, activeId, logout, call } = useApp();
+  const navigate = useNavigate();
   const [pendingCount, setPendingCount] = useState(0);
   const isAdmin = user.role === "Admin";
   const navItems = NAV_BY_ROLE[user.role] || [];
@@ -36,7 +38,7 @@ export default function Sidebar({ view, onNav, onOpenPaper }) {
           <button
             key={item.id}
             className={`sidebar-nav-item${view === item.id ? " active" : ""}`}
-            onClick={() => onNav(item.id)}
+            onClick={() => navigate(`/${item.id}`)}
           >
             {item.icon}<span>{item.label}</span>
             {item.badge && pendingCount > 0 && <span className="nav-badge">{pendingCount}</span>}

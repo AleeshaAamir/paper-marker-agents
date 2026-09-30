@@ -36,6 +36,14 @@ public class SessionRecord
     public required string Name { get; set; }
 }
 
+/// <summary>Internal storage wrapper - keeps ExpiresAt out of the public
+/// SessionRecord shape returned by /api/me and /api/login.</summary>
+public class SessionEntry
+{
+    public required SessionRecord Session { get; set; }
+    public required DateTime ExpiresAt { get; set; }
+}
+
 public class PendingVerification
 {
     public required string Code { get; set; }
@@ -73,6 +81,8 @@ public class PaperRow
     public string Source { get; set; } = "gold_set"; // "gold_set" | "live"
     public string? AssignedTo { get; set; }
 }
+
+public record TeacherInfo(string Email, string Name);
 
 public class ActivityEntry
 {

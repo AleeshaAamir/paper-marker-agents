@@ -1,19 +1,31 @@
 import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useApp } from "../AppContext";
 import { iconFor } from "../icons";
 import { gradingBand } from "../helpers";
 
 export default function StudentResults() {
   const { call, toast } = useApp();
+  const navigate = useNavigate();
+  const { segmentId } = useParams();
   const [cards, setCards] = useState(null);
-  const [detailId, setDetailId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [loadError, setLoadError] = useState(null);
 
-  useEffect(() => { loadList(); }, []);
+  useEffect(() => { loadList(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!segmentId) { setDetail(null); return; }
+    setDetail(null);
+    (async () => {
+      const res = await call(`/api/mark/${segmentId}?model=stub`);
+      if (!res.ok) { setLoadError(await res.text()); return; }
+      setDetail(await res.json());
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segmentId]);
 
   async function loadList() {
-    setDetailId(null);
     try {
       const res = await call("/api/segments");
       const segs = await res.json();
@@ -30,14 +42,6 @@ export default function StudentResults() {
     }
   }
 
-  async function openDetail(segId) {
-    setDetailId(segId);
-    setDetail(null);
-    const res = await call(`/api/mark/${segId}?model=stub`);
-    if (!res.ok) { setLoadError(await res.text()); return; }
-    setDetail(await res.json());
-  }
-
   async function verifyIntegrity(segId) {
     const res = await call(`/api/verify/${segId}`);
     if (!res.ok) { toast("Could not verify: " + (await res.text()), "error"); return; }
@@ -46,21 +50,21 @@ export default function StudentResults() {
   }
 
   if (loadError) return <div className="empty-state">Could not load results: {loadError}</div>;
-  if (cards === null) return <div className="loading"><span className="spinner"></span>Loading your results...</div>;
 
-  if (detailId && detail) {
+  if (segmentId) {
+    if (!detail) return <div className="loading"><span className="spinner"></span>Loading result...</div>;
     const final = detail.teacher_decision && detail.teacher_decision.action === "adjust" ? detail.teacher_decision.adjusted_total : detail.total_awarded;
     const pct = detail.max_marks ? Math.round((final / detail.max_marks) * 100) : 0;
     return (
       <>
         <div className="breadcrumb">
-          <span><a onClick={loadList}>My Results</a> / <span dir="auto">{detail.question_text || detailId}</span></span>
+          <span><a onClick={() => navigate("/results")}>My Results</a> / <span dir="auto">{detail.question_text || segmentId}</span></span>
           <button className="back-btn no-print" onClick={() => window.print()}>Print / Save as PDF</button>
         </div>
         <div className="result-layout">
           <div>
             <div className="result-summary-card">
-              <h3 dir="auto">{detail.question_text || detailId}</h3>
+              <h3 dir="auto">{detail.question_text || segmentId}</h3>
               <div className="rs-top">
                 <div><span className="result-summary-num">{final}</span><span className="result-summary-of"> / {detail.max_marks}</span></div>
               </div>
@@ -85,7 +89,7 @@ export default function StudentResults() {
               <h3>&#128274; Result Integrity Proof</h3>
               <p>This result's certificate hash is computed from its record and can be re-verified at any time.</p>
               <div className="integrity-hash">{detail.certificate_hash}</div>
-              <button className="action-btn no-print" style={{ width: "100%" }} onClick={() => verifyIntegrity(detailId)}>Verify Integrity</button>
+              <button className="action-btn no-print" style={{ width: "100%" }} onClick={() => verifyIntegrity(segmentId)}>Verify Integrity</button>
             </div>
             <div className="rubric-legend">
               <h3>Grading Bands</h3>
@@ -99,6 +103,8 @@ export default function StudentResults() {
       </>
     );
   }
+
+  if (cards === null) return <div className="loading"><span className="spinner"></span>Loading your results...</div>;
 
   if (cards.length === 0) {
     return (
@@ -116,7 +122,7 @@ export default function StudentResults() {
       </div>
       <div className="results-grid">
         {cards.map(({ seg, final, max }) => (
-          <div key={seg.segment_id} className="score-card" style={{ cursor: "pointer" }} onClick={() => openDetail(seg.segment_id)}>
+          <div key={seg.segment_id} className="score-card" style={{ cursor: "pointer" }} onClick={() => navigate(`/results/${seg.segment_id}`)}>
             <div className="score-card-label" dir="auto">{seg.question_text || seg.question_id}</div>
             <div className="score-card-num">{final}<span className="score-card-of"> / {max}</span></div>
           </div>
