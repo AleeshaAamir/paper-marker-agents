@@ -22,10 +22,4 @@
     <ProjectReference Include="..\backend\backend.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Include="fixtures\gold_set.jsonl">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
-
 </Project>

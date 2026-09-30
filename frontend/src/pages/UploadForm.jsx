@@ -22,7 +22,7 @@ function resizeImage(file, maxDim = 1400, quality = 0.85) {
 }
 
 export default function UploadForm({ onCancel, onSubmitted }) {
-  const { model, call, toast } = useApp();
+  const { model, call, toast, loadSegments } = useApp();
   const fileInputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -102,6 +102,7 @@ export default function UploadForm({ onCancel, onSubmitted }) {
       if (!res.ok) { toast("Failed to submit paper: " + (await res.text()), "error"); return; }
       const paper = await res.json();
       toast(`Paper submitted - Anonymous UUID ${paper.anon_uuid} generated. Marking now...`, "success");
+      await loadSegments();
       onSubmitted(paper.segment_id);
     } catch (err) {
       toast("Failed to submit paper: " + err, "error");

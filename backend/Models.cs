@@ -78,7 +78,7 @@ public class PaperRow
     public required double OcrConfidence { get; set; }
     public string ImagePath { get; set; } = "";
     public double? HumanMark { get; set; }
-    public string Source { get; set; } = "gold_set"; // "gold_set" | "live"
+    public string Source { get; set; } = "live";
     public string? AssignedTo { get; set; }
 }
 

@@ -1,21 +1,11 @@
 using Backend.Models;
 using Backend.Services;
-using Microsoft.Extensions.Configuration;
 
 namespace Backend.Tests;
 
 public class PapersServiceTests
 {
-    // Points at a small, controlled 2-row fixture instead of the real
-    // ai-service gold set - keeps these tests independent of that file's
-    // exact contents.
-    private static PapersService NewService()
-    {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["GoldSetPath"] = "fixtures/gold_set.jsonl" })
-            .Build();
-        return new PapersService(config);
-    }
+    private static PapersService NewService() => new();
 
     private static SessionRecord AdminSession() => new() { Email = "admin@gmail.com", Role = "Admin", Name = "Admin" };
     private static SessionRecord TeacherSession(string email) => new() { Email = email, Role = "Teacher", Name = "Teacher" };
@@ -45,22 +35,23 @@ public class PapersServiceTests
     }
 
     [Fact]
-    public void Admin_sees_all_gold_set_rows()
+    public void Admin_sees_only_uploaded_papers_no_sample_data()
     {
         var papers = NewService();
-        var rows = papers.VisibleRows(AdminSession());
-        Assert.Equal(2, rows.Count);
+        Assert.Empty(papers.VisibleRows(AdminSession()));
+
+        var newPaper = new NewPaperRequest("Subject", "en", "Question", 5, "answer text");
+        var row = papers.AddLivePaper(newPaper);
+        Assert.Contains(papers.VisibleRows(AdminSession()), r => r.SegmentId == row.SegmentId);
     }
 
     [Fact]
-    public void Teacher_only_sees_gold_set_plus_papers_assigned_to_them()
+    public void Teacher_only_sees_papers_assigned_to_them_no_sample_data()
     {
         var papers = NewService();
         var teacher = TeacherSession("someteacher@gmail.com");
 
-        // Gold-set rows are visible to every Teacher (the fixed sample set).
-        var rows = papers.VisibleRows(teacher);
-        Assert.Equal(2, rows.Count);
+        Assert.Empty(papers.VisibleRows(teacher));
 
         // A freshly-uploaded live paper is NOT visible until assigned to them.
         var newPaper = new NewPaperRequest("Subject", "en", "Question", 5, "answer text");

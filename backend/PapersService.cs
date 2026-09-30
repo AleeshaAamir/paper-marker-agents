@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Backend.Models;
 
 namespace Backend.Services;
@@ -14,74 +13,28 @@ namespace Backend.Services;
 /// </summary>
 public class PapersService
 {
-    private readonly string _goldPath;
     private readonly List<PaperRow> _livePapers = [];
     private readonly ConcurrentDictionary<string, DecisionRecord> _teacherDecisions = new();
     private readonly List<ActivityEntry> _activityLog = [];
     private readonly object _activityLock = new();
-    private List<PaperRow>? _goldRowsCache;
-
-    public PapersService(IConfiguration config)
-    {
-        // ai-service/ is a sibling of backend/ - both live at the repo root.
-        // Assumes `dotnet run` is executed from within backend/, same
-        // convention as running ai-service from within its own folder.
-        _goldPath = config["GoldSetPath"]
-            ?? Path.Combine("..", "ai-service", "data", "gold_set.jsonl");
-    }
-
-    private List<PaperRow> GoldRows()
-    {
-        // The gold set is a static demo fixture - read once, not on every
-        // request (mirrors treating it as read-only reference data).
-        if (_goldRowsCache != null) return _goldRowsCache;
-
-        var rows = new List<PaperRow>();
-        foreach (var line in File.ReadAllLines(_goldPath))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Length == 0 || trimmed.StartsWith("//")) continue;
-            using var doc = JsonDocument.Parse(trimmed);
-            var el = doc.RootElement;
-            rows.Add(new PaperRow
-            {
-                SegmentId = el.GetProperty("segment_id").GetString()!,
-                AnonUuid = el.GetProperty("anon_uuid").GetString()!,
-                ExamId = el.GetProperty("exam_id").GetString()!,
-                QuestionId = el.GetProperty("question_id").GetString()!,
-                Language = el.GetProperty("language").GetString()!,
-                MaxMarks = el.GetProperty("max_marks").GetDouble(),
-                QuestionText = el.TryGetProperty("question_text", out var qt) ? qt.GetString() ?? "" : "",
-                MarkingScheme = el.TryGetProperty("marking_scheme", out var ms) ? ms.GetString() : null,
-                OfficialAnswerKey = el.TryGetProperty("official_answer_key", out var oak) ? oak.GetString() : null,
-                OcrText = el.GetProperty("ocr_text").GetString()!,
-                OcrConfidence = el.GetProperty("ocr_confidence").GetDouble(),
-                HumanMark = el.TryGetProperty("human_mark", out var hm) && hm.ValueKind != JsonValueKind.Null ? hm.GetDouble() : null,
-                Source = "gold_set",
-            });
-        }
-        _goldRowsCache = rows;
-        return rows;
-    }
 
     private List<PaperRow> Rows()
     {
-        var combined = new List<PaperRow>(_livePapers);
-        combined.Reverse(); // newest live paper first
-        combined.AddRange(GoldRows());
-        return combined;
+        var rows = new List<PaperRow>(_livePapers);
+        rows.Reverse(); // newest upload first
+        return rows;
     }
 
     /// <summary>Same source list, narrowed to what this session's role may
-    /// see. Admin and Supervisor see everything (oversight roles); a
-    /// Teacher only sees the fixed sample set plus whatever's been
-    /// assigned to them.</summary>
+    /// see. Admin and Supervisor see every uploaded paper (oversight
+    /// roles); a Teacher only sees papers that have been assigned to
+    /// them.</summary>
     public List<PaperRow> VisibleRows(SessionRecord session)
     {
         var rows = Rows();
         if (session.Role == "Teacher")
         {
-            rows = rows.Where(r => r.Source == "gold_set" || r.AssignedTo == session.Email).ToList();
+            rows = rows.Where(r => r.AssignedTo == session.Email).ToList();
         }
         return rows;
     }

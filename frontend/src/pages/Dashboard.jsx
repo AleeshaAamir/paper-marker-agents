@@ -86,12 +86,10 @@ export default function Dashboard({ search, onOpenPaper }) {
                   <td><span className={`badge ${statusClass(seg)}`}>{statusLabelFor(seg)}</span></td>
                   {isAdmin && (
                     <td>
-                      {seg.source === "live" ? (
-                        <select className="assign-select" value={seg.assigned_to || ""} onChange={(e) => assign(seg.segment_id, e.target.value)}>
-                          <option value="">Unassigned</option>
-                          {teachers.map((t) => <option key={t.email} value={t.email}>{t.name}</option>)}
-                        </select>
-                      ) : <span className="confidence-pill">Sample data</span>}
+                      <select className="assign-select" value={seg.assigned_to || ""} onChange={(e) => assign(seg.segment_id, e.target.value)}>
+                        <option value="">Unassigned</option>
+                        {teachers.map((t) => <option key={t.email} value={t.email}>{t.name}</option>)}
+                      </select>
                     </td>
                   )}
                   <td><button className="action-btn" onClick={() => onOpenPaper(seg.segment_id)}>
